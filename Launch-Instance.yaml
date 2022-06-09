@@ -1,0 +1,15 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  Bu sablon EC2 ayaga kaldiriyor network ayarlari SSH olarak
+Resources:
+  MyEc2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0022f774911c1d690
+      InstanceType: t2.micro
+      KeyName: NVirginia-key  # kendi key dosyanizi girmeniz lazim
+      SecurityGroups:
+        - ssh-http
+      Tags:
+        - Key: Name
+          Value: Cfn-with-Yaml
