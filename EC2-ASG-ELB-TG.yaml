@@ -1,0 +1,171 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: |
+  Bunu kendim calisma amacli olusturuyorum. Ssh ve HTTP portlari acik.
+  ELB, SG, ASG, TG, Listener, Launchtemplate, ScalingPolicy olusturuldu.
+  
+Parameters:
+  MENkeypair:
+    Description: Lutfen anahtari secin 
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: NVirginia-key
+
+  MENinstanceType:
+    Description: Lutfen instance tipini sec
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t3.micro
+      - t2.nano
+      - t3.nano   
+
+  MENvpc:
+    Description: Lutfen vpc secin
+    Type: AWS::EC2::VPC::Id
+
+  MENsubnet:
+    Description: Lutfen subnet secimini yapin
+    Type: List<AWS::EC2::Subnet::Id>
+
+  MENsecurityGroup2:
+    Description: Lütfen security group secimini yapin
+    Type: AWS::EC2::SecurityGroup::Id
+
+Mappings:
+  RegionImageMap:
+    us-east-1:
+      AMI: ami-0022f774911c1d690
+    us-east-2:
+      AMI: ami-0233c2d874b811deb
+    us-west-1:
+      AMI: ami-0ed05376b59b90e46
+    us-west-2:
+      AMI: ami-0dc8f589abe99f538
+    eu-west-1:
+      AMI: ami-058b1b7fe545997ae
+
+Resources:
+  MENlaunchtemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !FindInMap
+          - RegionImageMap 
+          - !Ref AWS::Region
+          - AMI
+        InstanceType: !Ref MENinstanceType
+        KeyName: !Ref MENkeypair
+        SecurityGroupIds:
+          - !Ref MENsecurityGroup2  #!GetAtt MENsecurityGroup.GroupId
+        UserData: !Base64  |
+          #! /bin/bash
+          yum update -y
+          yum install -y httpd
+          TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"` \
+          && PRIVATE_IP=`curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4`
+          TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"` \
+          && PUBLIC_IP=`curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4` 
+          DATE_TIME=`date`
+          chmod -R 777 /var/www/html
+          echo "<html>
+          <head>
+              <title> Congratulations! You have created an instance from Launch Template</title>
+          </head>
+          <body>
+              <h1>This web server is launched from launch template by Edip Negiz</h1>
+              <p>This instance is created at <b>$DATE_TIME</b></p>
+              <p>Private IP address of this instance is <b>$PRIVATE_IP</b></p>
+              <p>Public IP address of this instance is <b>$PUBLIC_IP</b></p>
+          </body>
+          </html>" > /var/www/html/index.html
+          systemctl start httpd
+          systemctl enable httpd
+          ### Renklendirme:
+          echo 'export PS1="\e[1;31m[\u@\h \W]$ \e[0m"' >> /home/ec2-user/.bashrc
+      LaunchTemplateName: MENtemplateCFN
+      
+  MENloadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      SecurityGroups:
+        - !Ref MENsecurityGroup2   #!GetAtt MENsecurityGroup.GroupId 
+      Subnets: !Ref MENsubnet
+      Tags:
+        - Key: Name
+          Value: MEN-denemeELB
+      Type: application
+
+  MENtargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 20
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 5
+      Port: 80
+      Protocol: HTTP
+      Tags:
+        - Key: Name
+          Value: MENdenemeTG
+      UnhealthyThresholdCount: 2
+      VpcId: !Ref MENvpc
+
+  MENautoScaling:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AvailabilityZones: !GetAZs 
+      DesiredCapacity: "2"
+      HealthCheckGracePeriod: 120
+      HealthCheckType: ELB
+      LaunchTemplate:
+        LaunchTemplateId: !Ref MENlaunchtemplate
+        Version: "1"
+      MaxSize: "4" # Required
+      MinSize: "1" # Required
+      TargetGroupARNs:
+        - !Ref MENtargetGroup
+
+  MENscalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref MENautoScaling # Required
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 60.0
+
+  MENlistener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions: # Required
+        - Type: forward
+          TargetGroupArn: !Ref MENtargetGroup
+      LoadBalancerArn: !Ref MENloadBalancer  # Required
+      Port: 80
+      Protocol: HTTP
+
+  # MENsecurityGroup:
+  #   Type: AWS::EC2::SecurityGroup
+  #   Properties:
+  #     GroupDescription: Ssh ve Http protokolleri acik  # Required
+  #     SecurityGroupIngress:
+  #       - IpProtocol: tcp
+  #         FromPort: 22
+  #         ToPort: 22
+  #         CidrIp: 0.0.0.0/0
+  #       - IpProtocol: tcp
+  #         FromPort: 80
+  #         ToPort: 80
+  #         CidrIp: 0.0.0.0/0  
+  #     Tags:
+  #       - Key: Name
+  #         Value: MENdenemeSG
+  #     VpcId: !Ref MENvpc
+
+Outputs:
+  ALBDNSName:
+    Description: LoadBalancer icin DNSName olusturuldu
+    Value: !Join 
+      - ''
+      - - 'http://'
+        - !GetAtt myALB.DNSName
